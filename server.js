@@ -19,6 +19,16 @@ fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
 ensureSetup(db);
 
+// better-sqlite3 crashes (native assertion failure) if the process is killed
+// while it still holds an open connection — this is the pattern the library
+// itself documents for closing cleanly on shutdown. Container platforms like
+// Railway send SIGTERM routinely (restarts, redeploys, health-check cycling),
+// so without this the app crash-loops instead of exiting cleanly.
+process.on('exit', () => db.close());
+process.on('SIGHUP', () => process.exit(128 + 1));
+process.on('SIGINT', () => process.exit(128 + 2));
+process.on('SIGTERM', () => process.exit(128 + 15));
+
 const getSetting = db.prepare('SELECT value FROM settings WHERE key = ?');
 const setSetting = db.prepare(
   'INSERT INTO settings (key, value) VALUES (?, ?) ' +

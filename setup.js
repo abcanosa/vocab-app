@@ -23,6 +23,22 @@ function ensureSetup(db) {
       list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
       term TEXT NOT NULL,
       definition TEXT NOT NULL,
+      three_piles_status TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS list_stats (
+      list_id INTEGER PRIMARY KEY REFERENCES lists(id) ON DELETE CASCADE,
+      beat_score_high INTEGER NOT NULL DEFAULT 0,
+      reward_target INTEGER,
+      reward_text TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      list_id INTEGER REFERENCES lists(id) ON DELETE CASCADE,
+      message TEXT NOT NULL,
+      read INTEGER NOT NULL DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -36,6 +52,10 @@ function ensureSetup(db) {
   }
   if (!listColumns.some((c) => c.name === 'practice_mode')) {
     db.exec("ALTER TABLE lists ADD COLUMN practice_mode TEXT NOT NULL DEFAULT 'flip'");
+  }
+  const wordColumns = db.prepare('PRAGMA table_info(words)').all();
+  if (!wordColumns.some((c) => c.name === 'three_piles_status')) {
+    db.exec('ALTER TABLE words ADD COLUMN three_piles_status TEXT');
   }
 
   const getSetting = db.prepare('SELECT value FROM settings WHERE key = ?');

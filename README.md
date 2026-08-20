@@ -27,6 +27,21 @@ See [QUICKSTART.md](QUICKSTART.md) to get running in a few minutes, and
 - Comes with a built-in **Multiplication** list (all 1–12 times tables, 144
   cards) in type mode, created automatically the first time the server starts
 
+**Multiplication Games** — picking the Multiplication list opens 4 game modes
+instead of going straight to practice:
+- **🏆 Beat Your Score** — 60 seconds, answer as many cards as you can. Keeps
+  a persistent high score, and parents can set a target score with a reward
+  (Parent Dashboard → select Multiplication) — hitting it sends an in-app
+  notification to the Parent Dashboard.
+- **🗂️ Three Piles** — answer each card once; cards you get right in ≤3s go to
+  "Easy", ≤10s go to "Almost", and anything slower or wrong goes to "Need
+  Practice". Future rounds skip cards already sorted into Easy. Students can
+  reset their own progress any time from the in-game "🔄 Reset Progress" button.
+- **❓ Missing Number** — one factor is blanked out (`? × 5 = 25`) and you type
+  the missing number; cycles like Classic until every equation is solved.
+- **✖️ Classic** — the regular type-the-answer practice, plus a streak counter
+  that grows and shifts from pale blue to deep red as it climbs toward 100.
+
 ## Tech stack
 
 - **Backend**: Node.js + Express

@@ -29,6 +29,25 @@ function formatTime(totalSeconds) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+const PALE_BLUE = [173, 216, 230];
+const DEEP_RED = [139, 0, 0];
+
+function streakStyle(streak) {
+  const t = Math.min(streak, 100) / 100;
+  const [r, g, b] = PALE_BLUE.map((start, i) => Math.round(start + (DEEP_RED[i] - start) * t));
+  return {
+    color: `rgb(${r}, ${g}, ${b})`,
+    fontSize: `${1.1 + t * 1.4}rem`,
+    fontWeight: Math.round(500 + t * 400),
+    transition: 'color 0.3s, font-size 0.3s, font-weight 0.3s',
+  };
+}
+
+function parseMultiplicationTerm(term) {
+  const match = /^(\d+)\s*×\s*(\d+)$/.exec(term);
+  return match ? [Number(match[1]), Number(match[2])] : null;
+}
+
 // ---------------- Login ----------------
 
 function Login({ onLoggedIn, onBack }) {
@@ -169,6 +188,127 @@ function ChangePassword({ onClose }) {
   );
 }
 
+function NotificationsPanel() {
+  const [notifications, setNotifications] = useState([]);
+  const [error, setError] = useState('');
+
+  const load = useCallback(() => {
+    api('/api/notifications')
+      .then((data) => setNotifications(data.filter((n) => !n.read)))
+      .catch((err) => setError(err.message));
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const dismiss = async (id) => {
+    try {
+      await api(`/api/notifications/${id}/read`, { method: 'POST' });
+      setNotifications((ns) => ns.filter((n) => n.id !== id));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const dismissAll = async () => {
+    try {
+      await api('/api/notifications/read-all', { method: 'POST' });
+      setNotifications([]);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  if (error) return <p className="error banner">{error}</p>;
+  if (notifications.length === 0) return null;
+
+  return (
+    <div className="panel notifications">
+      <div className="row gap notifications-header">
+        <strong>🔔 Notifications</strong>
+        <button className="btn" onClick={dismissAll}>
+          Dismiss All
+        </button>
+      </div>
+      <ul className="list-items">
+        {notifications.map((n) => (
+          <li key={n.id} className="list-item">
+            <div>{n.message}</div>
+            <button className="icon-btn" title="Dismiss" onClick={() => dismiss(n.id)}>
+              ✖️
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function RewardConfig({ list }) {
+  const [rewardTarget, setRewardTarget] = useState('');
+  const [rewardText, setRewardText] = useState('');
+  const [highScore, setHighScore] = useState(0);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    setSaved(false);
+    setError('');
+    api(`/api/lists/${list.id}/stats`)
+      .then((data) => {
+        setRewardTarget(data.rewardTarget != null ? String(data.rewardTarget) : '');
+        setRewardText(data.rewardText || '');
+        setHighScore(data.highScore);
+      })
+      .catch((err) => setError(err.message));
+  }, [list.id]);
+
+  const save = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSaved(false);
+    try {
+      await api(`/api/lists/${list.id}/reward`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          rewardTarget: rewardTarget.trim() ? Number(rewardTarget) : null,
+          rewardText,
+        }),
+      });
+      setSaved(true);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  return (
+    <div className="panel">
+      <h2>🏆 Beat Your Score Reward</h2>
+      <p className="subtle">Current high score: {highScore}</p>
+      <form className="row gap" onSubmit={save}>
+        <input
+          type="number"
+          min="1"
+          placeholder="Target score (e.g. 20)"
+          value={rewardTarget}
+          onChange={(e) => setRewardTarget(e.target.value)}
+        />
+        <input
+          placeholder="Reward (e.g. 30 minutes extra screen time)"
+          value={rewardText}
+          onChange={(e) => setRewardText(e.target.value)}
+        />
+        <button className="btn primary" type="submit">
+          Save
+        </button>
+      </form>
+      {error && <p className="error">{error}</p>}
+      {saved && <p className="success">Saved!</p>}
+    </div>
+  );
+}
+
 function ParentDashboard({ onExit }) {
   const [lists, setLists] = useState([]);
   const [selectedList, setSelectedList] = useState(null);
@@ -281,6 +421,8 @@ function ParentDashboard({ onExit }) {
         </div>
       </header>
 
+      <NotificationsPanel />
+
       {error && <p className="error banner">{error}</p>}
 
       <div className="two-panel">
@@ -375,6 +517,8 @@ function ParentDashboard({ onExit }) {
         </div>
       </div>
 
+      {selectedList && selectedList.name === 'Multiplication' && <RewardConfig list={selectedList} />}
+
       {showChangePassword && <ChangePassword onClose={() => setShowChangePassword(false)} />}
     </div>
   );
@@ -404,9 +548,9 @@ function StudentListSelect({ onPick, onExit }) {
       <div className="mode-grid">
         {lists.map((list) => (
           <button key={list.id} className="mode-card" onClick={() => onPick(list)}>
-            <span className="mode-emoji">{list.practiceMode === 'type' ? '⌨️' : '📖'}</span>
+            <span className="mode-emoji">{list.name === 'Multiplication' ? '✖️' : list.practiceMode === 'type' ? '⌨️' : '📖'}</span>
             <span>{list.name}</span>
-            <span className="subtle">{list.wordCount} words</span>
+            <span className="subtle">{list.wordCount} {list.name === 'Multiplication' ? 'cards' : 'words'}</span>
           </button>
         ))}
         {lists.length === 0 && !error && (
@@ -480,7 +624,7 @@ function TypeAnswerCard({ word, onResult }) {
   );
 }
 
-function StudentPractice({ list, onExit }) {
+function StudentPractice({ list, onExit, showStreak = false, itemLabel = 'words' }) {
   const [allWords, setAllWords] = useState([]);
   const [pile, setPile] = useState([]);
   const [mastered, setMastered] = useState([]);
@@ -489,6 +633,7 @@ function StudentPractice({ list, onExit }) {
   const [done, setDone] = useState(false);
   const [round, setRound] = useState(0);
   const [elapsed, setElapsed] = useState(0);
+  const [streak, setStreak] = useState(0);
 
   useEffect(() => {
     api(`/api/lists/${list.id}/words`)
@@ -510,6 +655,7 @@ function StudentPractice({ list, onExit }) {
     const [current, ...rest] = pile;
     setFlipped(false);
     setRound((r) => r + 1);
+    setStreak((s) => (gotIt ? s + 1 : 0));
     if (gotIt) {
       const nextMastered = [...mastered, current];
       setMastered(nextMastered);
@@ -539,6 +685,7 @@ function StudentPractice({ list, onExit }) {
     setDone(false);
     setFlipped(false);
     setElapsed(0);
+    setStreak(0);
     setRound((r) => r + 1);
   };
 
@@ -567,7 +714,7 @@ function StudentPractice({ list, onExit }) {
         <div className="celebration">
           <h1>🎉 You mastered {list.name}! 🎉</h1>
           <p>
-            All {allWords.length} words learned in {formatTime(elapsed)}. Great job!
+            All {allWords.length} {itemLabel} learned in {formatTime(elapsed)}. Great job!
           </p>
           <div className="row gap">
             <button className="btn primary" onClick={restart}>
@@ -593,7 +740,7 @@ function StudentPractice({ list, onExit }) {
         <div className="row gap">
           <div className="timer">⏱ {formatTime(elapsed)}</div>
           <div className="progress">
-            {mastered.length}/{allWords.length} words
+            {mastered.length}/{allWords.length} {itemLabel}
           </div>
         </div>
       </header>
@@ -614,6 +761,507 @@ function StudentPractice({ list, onExit }) {
           </div>
         </>
       )}
+
+      {showStreak && <div style={streakStyle(streak)}>🔥 Streak: {streak}</div>}
+    </div>
+  );
+}
+
+// ---------------- Multiplication games ----------------
+
+const MULTIPLICATION_MODES = [
+  { id: 'beat-score', emoji: '🏆', label: 'Beat Your Score', desc: '60 seconds — how many can you get?' },
+  { id: 'three-piles', emoji: '🗂️', label: 'Three Piles', desc: 'Sort cards by how fast you know them' },
+  { id: 'missing-number', emoji: '❓', label: 'Missing Number', desc: 'Fill in the blank' },
+  { id: 'practice', emoji: '✖️', label: 'Classic', desc: 'Work through every card' },
+];
+
+function MultiplicationModes({ onPick, onExit }) {
+  return (
+    <div className="screen">
+      <header className="topbar">
+        <h1>✖️ Multiplication</h1>
+        <button className="btn" onClick={onExit}>
+          Exit
+        </button>
+      </header>
+      <div className="mode-grid">
+        {MULTIPLICATION_MODES.map((m) => (
+          <button key={m.id} className="mode-card" onClick={() => onPick(m.id)}>
+            <span className="mode-emoji">{m.emoji}</span>
+            <span>{m.label}</span>
+            <span className="subtle">{m.desc}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BeatYourScore({ list, onExit }) {
+  const [allCards, setAllCards] = useState([]);
+  const [highScore, setHighScore] = useState(null);
+  const [phase, setPhase] = useState('ready'); // ready | playing | done
+  const [current, setCurrent] = useState(null);
+  const [value, setValue] = useState('');
+  const [feedback, setFeedback] = useState(null); // 'correct' | 'incorrect' | null
+  const [score, setScore] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(60);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    Promise.all([api(`/api/lists/${list.id}/words`), api(`/api/lists/${list.id}/stats`)])
+      .then(([wordsData, stats]) => {
+        setAllCards(wordsData.words);
+        setHighScore(stats.highScore);
+      })
+      .catch((err) => setError(err.message));
+  }, [list.id]);
+
+  const pickNext = useCallback(
+    (excludeId) => {
+      if (allCards.length === 0) return null;
+      let pick;
+      do {
+        pick = allCards[Math.floor(Math.random() * allCards.length)];
+      } while (allCards.length > 1 && pick.id === excludeId);
+      return pick;
+    },
+    [allCards]
+  );
+
+  const start = () => {
+    setScore(0);
+    setTimeLeft(60);
+    setFeedback(null);
+    setValue('');
+    setResult(null);
+    setCurrent(pickNext(null));
+    setPhase('playing');
+  };
+
+  useEffect(() => {
+    if (phase !== 'playing') return undefined;
+    if (timeLeft <= 0) {
+      setPhase('done');
+      return undefined;
+    }
+    const t = setTimeout(() => setTimeLeft((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [phase, timeLeft]);
+
+  useEffect(() => {
+    if (phase === 'playing' && inputRef.current) inputRef.current.focus();
+  }, [phase, current]);
+
+  useEffect(() => {
+    if (phase !== 'done') return;
+    api(`/api/lists/${list.id}/beat-score`, { method: 'POST', body: JSON.stringify({ score }) })
+      .then((data) => {
+        setHighScore(data.highScore);
+        setResult(data);
+      })
+      .catch((err) => setError(err.message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  const submit = (e) => {
+    e.preventDefault();
+    if (!current || feedback) return;
+    const isRight = value.trim().toLowerCase() === current.definition.trim().toLowerCase();
+    setFeedback(isRight ? 'correct' : 'incorrect');
+    if (isRight) setScore((s) => s + 1);
+    const prev = current;
+    setValue('');
+    setTimeout(() => {
+      setFeedback(null);
+      setCurrent(pickNext(prev.id));
+    }, 250);
+  };
+
+  if (error) {
+    return (
+      <div className="screen center">
+        <p className="error">{error}</p>
+        <button className="btn" onClick={onExit}>
+          Back
+        </button>
+      </div>
+    );
+  }
+
+  if (allCards.length === 0 || highScore === null) {
+    return (
+      <div className="screen center">
+        <p className="subtle">Loading…</p>
+      </div>
+    );
+  }
+
+  if (phase === 'ready') {
+    return (
+      <div className="screen center">
+        <div className="card">
+          <h1>🏆 Beat Your Score</h1>
+          <p className="subtle">Answer as many cards as you can in 60 seconds.</p>
+          <p className="progress">High Score: {highScore}</p>
+          <button className="btn primary" onClick={start}>
+            Start
+          </button>
+          <button className="btn" onClick={onExit}>
+            Back
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === 'done') {
+    return (
+      <div className="screen center">
+        <div className="celebration">
+          <h1>⏱ Time's up!</h1>
+          <p>You answered {score} correctly.</p>
+          {result ? (
+            <>
+              <p className="progress">
+                High Score: {result.highScore}
+                {result.isNewHigh ? ' — New high score! 🎉' : ''}
+              </p>
+              {result.rewardEarned && (
+                <p className="success">🎉 Reward earned: {result.rewardText || 'Great job!'}</p>
+              )}
+            </>
+          ) : (
+            <p className="subtle">Saving score…</p>
+          )}
+          <div className="row gap">
+            <button className="btn primary" onClick={start}>
+              Play Again
+            </button>
+            <button className="btn" onClick={onExit}>
+              Back to Games
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="screen center">
+      <header className="topbar full">
+        <button className="btn" onClick={onExit}>
+          ← Games
+        </button>
+        <div className="row gap">
+          <div className="timer">⏱ {timeLeft}s</div>
+          <div className="progress">Score: {score}</div>
+        </div>
+      </header>
+      <form className={`quiz-card ${feedback || ''}`} onSubmit={submit}>
+        <div className="quiz-term">{current.term}</div>
+        <input
+          ref={inputRef}
+          className="quiz-input"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          disabled={!!feedback}
+          autoComplete="off"
+          autoFocus
+        />
+        <button type="submit" className="btn primary" disabled={!!feedback}>
+          Enter ⏎
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function ThreePiles({ list, onExit }) {
+  const [deck, setDeck] = useState(null); // null = loading
+  const [index, setIndex] = useState(0);
+  const [piles, setPiles] = useState({ easy: 0, almost: 0, needs_practice: 0 });
+  const [flight, setFlight] = useState(null);
+  const [value, setValue] = useState('');
+  const [round, setRound] = useState(0);
+  const [error, setError] = useState('');
+  const inputRef = useRef(null);
+  const cardStartRef = useRef(Date.now());
+
+  const load = useCallback(() => {
+    api(`/api/lists/${list.id}/words`)
+      .then((data) => {
+        const remaining = data.words.filter((w) => w.threePiles !== 'easy');
+        setDeck(shuffle(remaining));
+        setIndex(0);
+        setPiles({ easy: 0, almost: 0, needs_practice: 0 });
+        setRound((r) => r + 1);
+      })
+      .catch((err) => setError(err.message));
+  }, [list.id]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  useEffect(() => {
+    cardStartRef.current = Date.now();
+    setValue('');
+    if (inputRef.current) inputRef.current.focus();
+  }, [index, round]);
+
+  const current = deck && deck[index];
+
+  const classify = (isRight, elapsedSeconds) => {
+    if (!isRight) return 'needs_practice';
+    if (elapsedSeconds <= 3) return 'easy';
+    if (elapsedSeconds <= 10) return 'almost';
+    return 'needs_practice';
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!current || flight) return;
+    const elapsedSeconds = (Date.now() - cardStartRef.current) / 1000;
+    const isRight = value.trim().toLowerCase() === current.definition.trim().toLowerCase();
+    const status = classify(isRight, elapsedSeconds);
+
+    setFlight(status);
+    setPiles((p) => ({ ...p, [status]: p[status] + 1 }));
+
+    try {
+      await api(`/api/words/${current.id}/three-piles`, {
+        method: 'POST',
+        body: JSON.stringify({ status }),
+      });
+    } catch (err) {
+      setError(err.message);
+    }
+
+    setTimeout(() => {
+      setFlight(null);
+      setIndex((i) => i + 1);
+    }, 500);
+  };
+
+  const resetProgress = async () => {
+    if (!confirm('Reset all Three Piles progress for this list?')) return;
+    setError('');
+    try {
+      await api(`/api/lists/${list.id}/three-piles/reset`, { method: 'POST' });
+      load();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  if (error) {
+    return (
+      <div className="screen center">
+        <p className="error">{error}</p>
+        <button className="btn" onClick={onExit}>
+          Back
+        </button>
+      </div>
+    );
+  }
+
+  if (deck === null) {
+    return (
+      <div className="screen center">
+        <p className="subtle">Loading…</p>
+      </div>
+    );
+  }
+
+  const done = index >= deck.length;
+
+  return (
+    <div className="screen center">
+      <header className="topbar full">
+        <button className="btn" onClick={onExit}>
+          ← Games
+        </button>
+        <button className="btn" onClick={resetProgress}>
+          🔄 Reset Progress
+        </button>
+      </header>
+
+      {done ? (
+        <div className="celebration">
+          <h1>
+            {piles.easy + piles.almost + piles.needs_practice === 0
+              ? '🎉 Everything is already Easy!'
+              : '🗂️ Sorted!'}
+          </h1>
+          <p>
+            Easy: {piles.easy} · Almost: {piles.almost} · Need Practice: {piles.needs_practice}
+          </p>
+          <div className="row gap">
+            <button className="btn primary" onClick={load}>
+              Sort Again
+            </button>
+            <button className="btn" onClick={onExit}>
+              Back to Games
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <p className="progress">
+            {index + 1}/{deck.length}
+          </p>
+          <form className={`quiz-card flight-${flight || 'none'}`} onSubmit={submit}>
+            <div className="quiz-term">{current.term}</div>
+            <input
+              ref={inputRef}
+              className="quiz-input"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              disabled={!!flight}
+              autoComplete="off"
+              autoFocus
+            />
+            <button type="submit" className="btn primary" disabled={!!flight}>
+              Enter ⏎
+            </button>
+          </form>
+          <div className="pile-row">
+            <div className={`pile-box ${flight === 'easy' ? 'flash' : ''}`}>
+              <div className="pile-silhouette">🫥</div>
+              <div>Easy</div>
+              <div className="subtle">{piles.easy}</div>
+            </div>
+            <div className={`pile-box ${flight === 'almost' ? 'flash' : ''}`}>
+              <div className="pile-silhouette">🫥</div>
+              <div>Almost</div>
+              <div className="subtle">{piles.almost}</div>
+            </div>
+            <div className={`pile-box ${flight === 'needs_practice' ? 'flash' : ''}`}>
+              <div className="pile-silhouette">🫥</div>
+              <div>Need Practice</div>
+              <div className="subtle">{piles.needs_practice}</div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MissingNumber({ list, onExit }) {
+  const [puzzles, setPuzzles] = useState([]);
+  const [pile, setPile] = useState([]);
+  const [mastered, setMastered] = useState([]);
+  const [done, setDone] = useState(false);
+  const [round, setRound] = useState(0);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    api(`/api/lists/${list.id}/words`)
+      .then((data) => {
+        const built = data.words
+          .map((w) => {
+            const parsed = parseMultiplicationTerm(w.term);
+            if (!parsed) return null;
+            const [a, b] = parsed;
+            const blankFirst = Math.random() < 0.5;
+            const term = blankFirst ? `? × ${b} = ${w.definition}` : `${a} × ? = ${w.definition}`;
+            const answer = blankFirst ? String(a) : String(b);
+            return { id: w.id, term, definition: answer };
+          })
+          .filter(Boolean);
+        const shuffled = shuffle(built);
+        setPuzzles(shuffled);
+        setPile(shuffled);
+      })
+      .catch((err) => setError(err.message));
+  }, [list.id]);
+
+  const advance = (gotIt) => {
+    const [current, ...rest] = pile;
+    setRound((r) => r + 1);
+    if (gotIt) {
+      const nextMastered = [...mastered, current];
+      setMastered(nextMastered);
+      if (rest.length === 0) {
+        if (nextMastered.length >= puzzles.length) {
+          setDone(true);
+          setPile([]);
+        } else {
+          setPile(shuffle(puzzles.filter((p) => !nextMastered.some((m) => m.id === p.id))));
+        }
+      } else {
+        setPile(rest);
+      }
+    } else if (rest.length === 0) {
+      setPile(shuffle([...rest, current]));
+    } else {
+      setPile([...rest, current]);
+    }
+  };
+
+  const restart = () => {
+    setMastered([]);
+    setPile(shuffle(puzzles));
+    setDone(false);
+    setRound((r) => r + 1);
+  };
+
+  if (error) {
+    return (
+      <div className="screen center">
+        <p className="error">{error}</p>
+        <button className="btn" onClick={onExit}>
+          Back
+        </button>
+      </div>
+    );
+  }
+
+  if (puzzles.length === 0) {
+    return (
+      <div className="screen center">
+        <p className="subtle">Loading…</p>
+      </div>
+    );
+  }
+
+  if (done) {
+    return (
+      <div className="screen center">
+        <div className="celebration">
+          <h1>❓ All solved!</h1>
+          <p>You filled in all {puzzles.length} missing numbers.</p>
+          <div className="row gap">
+            <button className="btn primary" onClick={restart}>
+              Play Again
+            </button>
+            <button className="btn" onClick={onExit}>
+              Back to Games
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const current = pile[0];
+
+  return (
+    <div className="screen center">
+      <header className="topbar full">
+        <button className="btn" onClick={onExit}>
+          ← Games
+        </button>
+        <div className="progress">
+          {mastered.length}/{puzzles.length}
+        </div>
+      </header>
+      <TypeAnswerCard key={`${current.id}-${round}`} word={current} onResult={advance} />
     </div>
   );
 }
@@ -664,15 +1312,46 @@ function App() {
       <StudentListSelect
         onPick={(list) => {
           setActiveList(list);
-          setScreen('practice');
+          setScreen(list.name === 'Multiplication' ? 'multiplication-modes' : 'practice');
         }}
         onExit={() => setScreen('mode')}
       />
     );
   }
 
+  if (screen === 'multiplication-modes') {
+    return (
+      <MultiplicationModes
+        onPick={(mode) => setScreen(mode)}
+        onExit={() => setScreen('student')}
+      />
+    );
+  }
+
+  const backToMultiplicationModes = () => setScreen('multiplication-modes');
+
+  if (screen === 'beat-score') {
+    return <BeatYourScore list={activeList} onExit={backToMultiplicationModes} />;
+  }
+
+  if (screen === 'three-piles') {
+    return <ThreePiles list={activeList} onExit={backToMultiplicationModes} />;
+  }
+
+  if (screen === 'missing-number') {
+    return <MissingNumber list={activeList} onExit={backToMultiplicationModes} />;
+  }
+
   if (screen === 'practice') {
-    return <StudentPractice list={activeList} onExit={() => setScreen('student')} />;
+    const isMultiplication = activeList && activeList.name === 'Multiplication';
+    return (
+      <StudentPractice
+        list={activeList}
+        onExit={() => setScreen(isMultiplication ? 'multiplication-modes' : 'student')}
+        showStreak={isMultiplication}
+        itemLabel={isMultiplication ? 'cards' : 'words'}
+      />
+    );
   }
 
   return null;

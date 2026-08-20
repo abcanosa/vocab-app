@@ -314,3 +314,46 @@ textarea { resize: vertical; }
 }
 
 .celebration h1 { font-size: 1.8em; }
+
+/* Multiplication games */
+
+.notifications { border: 2px solid var(--primary); }
+
+.notifications-header {
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.quiz-card.flight-easy { border-color: var(--success); transform: scale(0.85) translateY(40px); opacity: 0.4; }
+.quiz-card.flight-almost { border-color: #f0ad4e; transform: scale(0.85) translateY(0); opacity: 0.4; }
+.quiz-card.flight-needs_practice { border-color: var(--danger); transform: scale(0.85) translateX(60px); opacity: 0.4; }
+.quiz-card.flight-easy, .quiz-card.flight-almost, .quiz-card.flight-needs_practice {
+  transition: transform 0.4s ease, opacity 0.4s ease;
+}
+
+.pile-row {
+  display: flex;
+  gap: 16px;
+  width: 100%;
+  max-width: 460px;
+  justify-content: center;
+}
+
+.pile-box {
+  flex: 1;
+  text-align: center;
+  padding: 12px 8px;
+  border-radius: 12px;
+  border: 2px dashed var(--border);
+  transition: background 0.3s, border-color 0.3s;
+}
+
+.pile-box.flash {
+  background: #f4f1ff;
+  border-color: var(--primary);
+}
+
+.pile-silhouette {
+  font-size: 1.8em;
+  opacity: 0.5;
+}

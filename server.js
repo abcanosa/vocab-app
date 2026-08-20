@@ -147,7 +147,10 @@ app.get('/api/lists/:id/words', (req, res) => {
     .get(req.params.id);
   if (!list) return res.status(404).json({ error: 'List not found' });
   const words = db
-    .prepare('SELECT id, term, definition FROM words WHERE list_id = ? ORDER BY created_at ASC')
+    .prepare(
+      `SELECT id, term, definition, three_piles_status AS threePiles
+       FROM words WHERE list_id = ? ORDER BY created_at ASC`
+    )
     .all(req.params.id);
   res.json({ list, words });
 });
@@ -172,6 +175,128 @@ app.post('/api/words', requireAuth, (req, res) => {
 app.delete('/api/words/:id', requireAuth, (req, res) => {
   const info = db.prepare('DELETE FROM words WHERE id = ?').run(req.params.id);
   if (info.changes === 0) return res.status(404).json({ error: 'Word not found' });
+  res.json({ success: true });
+});
+
+// ---- Multiplication games ----
+
+const THREE_PILES_STATUSES = ['easy', 'almost', 'needs_practice'];
+
+// Public: students sort their own cards while playing Three Piles.
+app.post('/api/words/:id/three-piles', (req, res) => {
+  const { status } = req.body || {};
+  if (!THREE_PILES_STATUSES.includes(status)) {
+    return res.status(400).json({ error: 'Invalid status' });
+  }
+  const info = db
+    .prepare('UPDATE words SET three_piles_status = ? WHERE id = ?')
+    .run(status, req.params.id);
+  if (info.changes === 0) return res.status(404).json({ error: 'Word not found' });
+  res.json({ success: true });
+});
+
+// Public: a student can reset their own Three Piles progress at any time.
+app.post('/api/lists/:id/three-piles/reset', (req, res) => {
+  const info = db
+    .prepare('UPDATE words SET three_piles_status = NULL WHERE list_id = ?')
+    .run(req.params.id);
+  res.json({ success: true, cleared: info.changes });
+});
+
+function getOrCreateListStats(listId) {
+  let stats = db.prepare('SELECT * FROM list_stats WHERE list_id = ?').get(listId);
+  if (!stats) {
+    db.prepare('INSERT INTO list_stats (list_id) VALUES (?)').run(listId);
+    stats = db.prepare('SELECT * FROM list_stats WHERE list_id = ?').get(listId);
+  }
+  return stats;
+}
+
+// Public: students need to see the current high score before/after a round.
+app.get('/api/lists/:id/stats', (req, res) => {
+  const list = db.prepare('SELECT id FROM lists WHERE id = ?').get(req.params.id);
+  if (!list) return res.status(404).json({ error: 'List not found' });
+  const stats = getOrCreateListStats(req.params.id);
+  res.json({
+    highScore: stats.beat_score_high,
+    rewardTarget: stats.reward_target,
+    rewardText: stats.reward_text,
+  });
+});
+
+// Public: submitting a Beat Your Score round result.
+app.post('/api/lists/:id/beat-score', (req, res) => {
+  const { score } = req.body || {};
+  if (!Number.isInteger(score) || score < 0) {
+    return res.status(400).json({ error: 'score must be a non-negative integer' });
+  }
+  const list = db.prepare('SELECT id, name FROM lists WHERE id = ?').get(req.params.id);
+  if (!list) return res.status(404).json({ error: 'List not found' });
+
+  const stats = getOrCreateListStats(req.params.id);
+  const isNewHigh = score > stats.beat_score_high;
+  if (isNewHigh) {
+    db.prepare('UPDATE list_stats SET beat_score_high = ? WHERE list_id = ?').run(score, req.params.id);
+  }
+
+  let rewardEarned = false;
+  if (stats.reward_target != null && score >= stats.reward_target) {
+    rewardEarned = true;
+    const message = stats.reward_text
+      ? `🎉 ${list.name}: scored ${score} in Beat Your Score and earned: ${stats.reward_text}!`
+      : `🎉 ${list.name}: scored ${score} in Beat Your Score, hitting the reward target!`;
+    db.prepare('INSERT INTO notifications (list_id, message) VALUES (?, ?)').run(req.params.id, message);
+  }
+
+  res.json({
+    highScore: Math.max(score, stats.beat_score_high),
+    isNewHigh,
+    rewardEarned,
+    rewardText: stats.reward_text,
+  });
+});
+
+// Parent-only: configure the Beat Your Score reward.
+app.put('/api/lists/:id/reward', requireAuth, (req, res) => {
+  const { rewardTarget, rewardText } = req.body || {};
+  const list = db.prepare('SELECT id FROM lists WHERE id = ?').get(req.params.id);
+  if (!list) return res.status(404).json({ error: 'List not found' });
+
+  const cleanTarget =
+    rewardTarget === null || rewardTarget === '' || rewardTarget === undefined
+      ? null
+      : Number(rewardTarget);
+  if (cleanTarget !== null && (!Number.isInteger(cleanTarget) || cleanTarget < 1)) {
+    return res.status(400).json({ error: 'rewardTarget must be a positive integer' });
+  }
+  const cleanText = typeof rewardText === 'string' && rewardText.trim() ? rewardText.trim() : null;
+
+  getOrCreateListStats(req.params.id);
+  db.prepare('UPDATE list_stats SET reward_target = ?, reward_text = ? WHERE list_id = ?').run(
+    cleanTarget,
+    cleanText,
+    req.params.id
+  );
+  res.json({ rewardTarget: cleanTarget, rewardText: cleanText });
+});
+
+// ---- Notifications (parent-only) ----
+
+app.get('/api/notifications', requireAuth, (req, res) => {
+  const notifications = db
+    .prepare('SELECT id, message, read, created_at AS createdAt FROM notifications ORDER BY created_at DESC')
+    .all();
+  res.json(notifications);
+});
+
+app.post('/api/notifications/:id/read', requireAuth, (req, res) => {
+  const info = db.prepare('UPDATE notifications SET read = 1 WHERE id = ?').run(req.params.id);
+  if (info.changes === 0) return res.status(404).json({ error: 'Notification not found' });
+  res.json({ success: true });
+});
+
+app.post('/api/notifications/read-all', requireAuth, (req, res) => {
+  db.prepare('UPDATE notifications SET read = 1 WHERE read = 0').run();
   res.json({ success: true });
 });
 

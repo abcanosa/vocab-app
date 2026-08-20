@@ -30,7 +30,11 @@ settings(key TEXT PRIMARY KEY, value TEXT)
 lists(id INTEGER PRIMARY KEY, name TEXT UNIQUE, grade_level TEXT,
       practice_mode TEXT DEFAULT 'flip', created_at TEXT)
 words(id INTEGER PRIMARY KEY, list_id INTEGER REFERENCES lists(id) ON DELETE CASCADE,
-      term TEXT, definition TEXT, created_at TEXT)
+      term TEXT, definition TEXT, three_piles_status TEXT, created_at TEXT)
+list_stats(list_id INTEGER PRIMARY KEY REFERENCES lists(id) ON DELETE CASCADE,
+           beat_score_high INTEGER DEFAULT 0, reward_target INTEGER, reward_text TEXT)
+notifications(id INTEGER PRIMARY KEY, list_id INTEGER REFERENCES lists(id) ON DELETE CASCADE,
+              message TEXT, read INTEGER DEFAULT 0, created_at TEXT)
 ```
 
 `settings` holds two rows: `password_hash` (bcrypt) and `session_secret` (random,
@@ -86,6 +90,14 @@ in-memory store — fine for a household server that isn't horizontally scaled).
 | GET | /api/lists/:id/words | – | get one list's words (public, for practice) |
 | POST | /api/words | ✓ | add a word to a list |
 | DELETE | /api/words/:id | ✓ | delete a word |
+| POST | /api/words/:id/three-piles | – | set a card's Three Piles status (public — students sort their own cards) |
+| POST | /api/lists/:id/three-piles/reset | – | clear all Three Piles statuses for a list (public — student-facing reset) |
+| GET | /api/lists/:id/stats | – | Beat Your Score high score + reward config (public, shown pre/post round) |
+| POST | /api/lists/:id/beat-score | – | submit a round score; updates high score, fires a notification if the reward target is met |
+| PUT | /api/lists/:id/reward | ✓ | set the Beat Your Score reward target/text |
+| GET | /api/notifications | ✓ | list unread parent notifications |
+| POST | /api/notifications/:id/read | ✓ | dismiss one notification |
+| POST | /api/notifications/read-all | ✓ | dismiss all notifications |
 
 ## Frontend
 
@@ -162,6 +174,61 @@ in its dependency array). Shown live in the header (`⏱ m:ss`, via
 `formatTime`) and again as the final time on the celebration screen. `restart`
 resets it to 0. It runs the same way for both practice modes; nothing about it
 is quiz-specific.
+
+### Multiplication games
+
+Gated by list *name* (`list.name === 'Multiplication'`), checked in two places:
+`StudentListSelect`'s pick handler in `App` (routes to `multiplication-modes`
+instead of straight to `practice`) and the `practice` screen itself (turns on
+`showStreak`/`itemLabel="cards"` on `StudentPractice`). This is a deliberate
+shortcut, not a `practiceMode`-style generic flag — Missing Number's factor-
+parsing (`parseMultiplicationTerm`, a regex over `"a × b"`) and Beat Your
+Score's numeric scoring don't generalize to arbitrary vocab lists, so there
+was no clean generic hook to hang this on. A teacher renaming the list away
+from "Multiplication" loses the games screen (falls back to Classic-only,
+same as any other list) — same tradeoff already made for the seed script.
+
+- **Beat Your Score** (`BeatYourScore`): a 60-second countdown (`setTimeout`
+  chain, not `setInterval`, so the interval id doesn't leak across renders)
+  drawing random cards (avoiding an immediate repeat of the same card) from
+  the full 144. Each answer scores and immediately advances — no
+  "wait to acknowledge" step like Classic, since it's a speed drill. On
+  timeout, the round score posts to `POST /:id/beat-score`, which persists
+  the high score server-side (`list_stats.beat_score_high`, monotonic) and,
+  if a reward is configured (`PUT /:id/reward`, parent-only) and met, inserts
+  a row into `notifications` — polled by `NotificationsPanel` when a parent
+  next opens the dashboard. There's no push mechanism; notifications are
+  read on demand, which is fine for a household app nobody expects real-time
+  alerts from.
+- **Three Piles** (`ThreePiles`): a single pass through the non-`'easy'`
+  cards (`words.three_piles_status`), classified on submit by elapsed time
+  (`Date.now()` captured on card mount vs. on submit) into `easy` (≤3s
+  correct), `almost` (≤10s correct), or `needs_practice` (slower or wrong) —
+  persisted per-card via `POST /words/:id/three-piles`. Next session's deck
+  excludes `easy` cards client-side (`words.filter(w => w.threePiles !==
+  'easy')`); `almost` and `needs_practice` cards come back. The in-game
+  "🔄 Reset Progress" button (`POST /lists/:id/three-piles/reset`) clears all
+  statuses for the list — deliberately student-facing and not parent-gated,
+  since it only resets game progress, not any real data.
+- **Missing Number** (`MissingNumber`): no new schema — transforms the
+  existing 144 `words` client-side into puzzle objects (`{id, term: "? × 5 =
+  25", definition: "<blanked factor>"}`) via `parseMultiplicationTerm` +
+  a random blank-position coin flip per card, then reuses `TypeAnswerCard`
+  directly (it only needs `.term`/`.definition` on whatever `word`-shaped
+  object it's given) and the same shuffle/pile/mastered loop pattern as
+  `StudentPractice` — copied rather than shared as a hook, since
+  `StudentPractice` already had a working, tested version of this logic and
+  extracting a hook mid-feature risked regressing it for no real gain at this
+  scale (two call sites).
+- **Classic + streak**: `StudentPractice` itself, with `showStreak` on. The
+  streak count increments in `advance(gotIt)` (already the single place both
+  interaction modes funnel through) and resets to 0 on a miss. Its color/size
+  are computed by `streakStyle(streak)` — an RGB lerp from pale blue to deep
+  red plus a font-size/weight ramp, both capped at `streak === 100` via
+  `Math.min(streak, 100) / 100` as the interpolation factor, applied as an
+  inline `style` object rather than CSS custom properties since the value
+  changes on every answer and there's no benefit to indirecting through CSS
+  for a single element.
 
 ## Extending it
 

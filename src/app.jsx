@@ -248,18 +248,18 @@ function NotificationsPanel() {
 function RewardConfig({ list }) {
   const [rewardTarget, setRewardTarget] = useState('');
   const [rewardText, setRewardText] = useState('');
-  const [highScore, setHighScore] = useState(0);
+  const [scores, setScores] = useState([]);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     setSaved(false);
     setError('');
-    api(`/api/lists/${list.id}/stats`)
+    api(`/api/lists/${list.id}/reward`)
       .then((data) => {
         setRewardTarget(data.rewardTarget != null ? String(data.rewardTarget) : '');
         setRewardText(data.rewardText || '');
-        setHighScore(data.highScore);
+        setScores(data.scores);
       })
       .catch((err) => setError(err.message));
   }, [list.id]);
@@ -285,7 +285,13 @@ function RewardConfig({ list }) {
   return (
     <div className="panel">
       <h2>🏆 Beat Your Score Reward</h2>
-      <p className="subtle">Current high score: {highScore}</p>
+      {scores.length > 0 ? (
+        <p className="subtle">
+          High scores: {scores.map((s) => `${s.studentName}: ${s.highScore}`).join(' · ')}
+        </p>
+      ) : (
+        <p className="subtle">Assign this list to a student to start tracking high scores.</p>
+      )}
       <form className="row gap" onSubmit={save}>
         <input
           type="number"
@@ -309,17 +315,21 @@ function RewardConfig({ list }) {
   );
 }
 
-function ParentDashboard({ onExit }) {
+function ParentDashboard({ students, onPreview, onExit }) {
   const [lists, setLists] = useState([]);
   const [selectedList, setSelectedList] = useState(null);
   const [words, setWords] = useState([]);
   const [newListName, setNewListName] = useState('');
   const [newListGrade, setNewListGrade] = useState('');
   const [newListMode, setNewListMode] = useState('flip');
+  const [newListStudentIds, setNewListStudentIds] = useState([]);
   const [term, setTerm] = useState('');
   const [definition, setDefinition] = useState('');
+  const [copyTarget, setCopyTarget] = useState('');
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [error, setError] = useState('');
+
+  const studentName = (id) => (students.find((s) => s.id === id) || {}).name || 'Unknown';
 
   const loadLists = useCallback(async () => {
     const data = await api('/api/lists');
@@ -351,13 +361,55 @@ function ParentDashboard({ onExit }) {
           name: newListName.trim(),
           gradeLevel: newListGrade,
           practiceMode: newListMode,
+          studentIds: newListStudentIds,
         }),
       });
       setNewListName('');
       setNewListGrade('');
       setNewListMode('flip');
+      setNewListStudentIds([]);
       const updated = await loadLists();
       setSelectedList(updated.find((l) => l.id === list.id) || list);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const toggleNewListStudent = (studentId) => {
+    setNewListStudentIds((ids) =>
+      ids.includes(studentId) ? ids.filter((id) => id !== studentId) : [...ids, studentId]
+    );
+  };
+
+  const toggleAssignment = async (studentId) => {
+    if (!selectedList) return;
+    const current = selectedList.assignedStudentIds || [];
+    const next = current.includes(studentId)
+      ? current.filter((id) => id !== studentId)
+      : [...current, studentId];
+    setError('');
+    try {
+      await api(`/api/lists/${selectedList.id}/assignments`, {
+        method: 'PUT',
+        body: JSON.stringify({ studentIds: next }),
+      });
+      setSelectedList((l) => ({ ...l, assignedStudentIds: next }));
+      setLists((ls) => ls.map((l) => (l.id === selectedList.id ? { ...l, assignedStudentIds: next } : l)));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const copyList = async () => {
+    if (!selectedList || !copyTarget) return;
+    setError('');
+    try {
+      await api(`/api/lists/${selectedList.id}/copy`, {
+        method: 'POST',
+        body: JSON.stringify({ studentId: Number(copyTarget) }),
+      });
+      setCopyTarget('');
+      await loadLists();
     } catch (err) {
       setError(err.message);
     }
@@ -448,6 +500,19 @@ function ParentDashboard({ onExit }) {
                 <option value="type">⌨️ Type the answer</option>
               </select>
             </div>
+            <div className="row gap">
+              <span className="subtle">Visible to:</span>
+              {students.map((s) => (
+                <label key={s.id} className="row gap" style={{ alignItems: 'center' }}>
+                  <input
+                    type="checkbox"
+                    checked={newListStudentIds.includes(s.id)}
+                    onChange={() => toggleNewListStudent(s.id)}
+                  />
+                  {s.name}
+                </label>
+              ))}
+            </div>
             <button className="btn primary" type="submit">
               Add List
             </button>
@@ -462,6 +527,15 @@ function ParentDashboard({ onExit }) {
                   {list.name}
                   {list.gradeLevel && <span className="badge">Grade {list.gradeLevel}</span>}
                   {list.practiceMode === 'type' && <span className="badge">⌨️ Type</span>}{' '}
+                  {(list.assignedStudentIds || []).length > 0 ? (
+                    list.assignedStudentIds.map((sid) => (
+                      <span key={sid} className="badge">
+                        → {studentName(sid)}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="badge subtle">Unassigned</span>
+                  )}{' '}
                   <span className="subtle">({list.wordCount})</span>
                 </button>
                 <button className="icon-btn" title="Delete list" onClick={() => deleteList(list)}>
@@ -481,6 +555,47 @@ function ParentDashboard({ onExit }) {
                 {selectedList.gradeLevel && <span className="badge">Grade {selectedList.gradeLevel}</span>}
                 {selectedList.practiceMode === 'type' && <span className="badge">⌨️ Type</span>}
               </h2>
+
+              <div className="row gap">
+                <span className="subtle">Visible to:</span>
+                {students.map((s) => (
+                  <label key={s.id} className="row gap" style={{ alignItems: 'center' }}>
+                    <input
+                      type="checkbox"
+                      checked={(selectedList.assignedStudentIds || []).includes(s.id)}
+                      onChange={() => toggleAssignment(s.id)}
+                    />
+                    {s.name}
+                  </label>
+                ))}
+              </div>
+
+              <div className="row gap">
+                <select value={copyTarget} onChange={(e) => setCopyTarget(e.target.value)}>
+                  <option value="">Copy this list to…</option>
+                  {students.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+                <button className="btn" onClick={copyList} disabled={!copyTarget}>
+                  📋 Copy
+                </button>
+              </div>
+
+              <div className="row gap">
+                {(selectedList.assignedStudentIds || []).length > 0 ? (
+                  selectedList.assignedStudentIds.map((sid) => (
+                    <button key={sid} className="btn" onClick={() => onPreview(selectedList, sid)}>
+                      ▶️ Play as {studentName(sid)}
+                    </button>
+                  ))
+                ) : (
+                  <p className="subtle">Assign this list to a student to preview it as them.</p>
+                )}
+              </div>
+
               <form className="stack gap" onSubmit={addWord}>
                 <input
                   placeholder="Term"
@@ -526,23 +641,50 @@ function ParentDashboard({ onExit }) {
 
 // ---------------- Student practice ----------------
 
-function StudentListSelect({ onPick, onExit }) {
+function StudentProfilePick({ students, onPick, onExit }) {
+  return (
+    <div className="screen center">
+      <header className="topbar full">
+        <button className="btn" onClick={onExit}>
+          Exit
+        </button>
+      </header>
+      <h1>👋 Who's playing?</h1>
+      <div className="mode-grid">
+        {students.map((s) => (
+          <button key={s.id} className="mode-card" onClick={() => onPick(s)}>
+            <span className="mode-emoji">🧒</span>
+            <span>{s.name}</span>
+          </button>
+        ))}
+        {students.length === 0 && <p className="subtle">No students set up yet.</p>}
+      </div>
+    </div>
+  );
+}
+
+function StudentListSelect({ studentId, studentName, onPick, onSwitch, onExit }) {
   const [lists, setLists] = useState([]);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    api('/api/lists')
+    api(`/api/lists?studentId=${studentId}`)
       .then((data) => setLists(data.filter((l) => l.wordCount > 0)))
       .catch((err) => setError(err.message));
-  }, []);
+  }, [studentId]);
 
   return (
     <div className="screen">
       <header className="topbar">
-        <h1>👦 Pick a List</h1>
-        <button className="btn" onClick={onExit}>
-          Exit
-        </button>
+        <h1>👦 {studentName}'s Lists</h1>
+        <div className="row gap">
+          <button className="btn" onClick={onSwitch}>
+            Switch
+          </button>
+          <button className="btn" onClick={onExit}>
+            Exit
+          </button>
+        </div>
       </header>
       {error && <p className="error banner">{error}</p>}
       <div className="mode-grid">
@@ -776,7 +918,7 @@ const MULTIPLICATION_MODES = [
   { id: 'practice', emoji: '✖️', label: 'Classic', desc: 'Work through every card' },
 ];
 
-function MultiplicationModes({ onPick, onExit }) {
+function MultiplicationModes({ isPreview, previewStudentName, onPick, onExit }) {
   return (
     <div className="screen">
       <header className="topbar">
@@ -785,6 +927,9 @@ function MultiplicationModes({ onPick, onExit }) {
           Exit
         </button>
       </header>
+      {isPreview && (
+        <p className="subtle">🔍 Previewing as {previewStudentName} — scores and progress here aren't saved</p>
+      )}
       <div className="mode-grid">
         {MULTIPLICATION_MODES.map((m) => (
           <button key={m.id} className="mode-card" onClick={() => onPick(m.id)}>
@@ -798,7 +943,7 @@ function MultiplicationModes({ onPick, onExit }) {
   );
 }
 
-function BeatYourScore({ list, onExit }) {
+function BeatYourScore({ list, studentId, isPreview, previewStudentName, onExit }) {
   const [allCards, setAllCards] = useState([]);
   const [highScore, setHighScore] = useState(null);
   const [phase, setPhase] = useState('ready'); // ready | playing | done
@@ -812,13 +957,16 @@ function BeatYourScore({ list, onExit }) {
   const inputRef = useRef(null);
 
   useEffect(() => {
-    Promise.all([api(`/api/lists/${list.id}/words`), api(`/api/lists/${list.id}/stats`)])
+    Promise.all([
+      api(`/api/lists/${list.id}/words`),
+      api(`/api/lists/${list.id}/stats?studentId=${studentId}`),
+    ])
       .then(([wordsData, stats]) => {
         setAllCards(wordsData.words);
         setHighScore(stats.highScore);
       })
       .catch((err) => setError(err.message));
-  }, [list.id]);
+  }, [list.id, studentId]);
 
   const pickNext = useCallback(
     (excludeId) => {
@@ -858,7 +1006,22 @@ function BeatYourScore({ list, onExit }) {
 
   useEffect(() => {
     if (phase !== 'done') return;
-    api(`/api/lists/${list.id}/beat-score`, { method: 'POST', body: JSON.stringify({ score }) })
+    if (isPreview) {
+      // Preview runs are never saved — a parent playing through shouldn't be
+      // able to overwrite (or even see themselves credited with) a student's
+      // high score.
+      setResult({
+        highScore: Math.max(score, highScore),
+        isNewHigh: score > highScore,
+        rewardEarned: false,
+        rewardText: null,
+      });
+      return;
+    }
+    api(`/api/lists/${list.id}/beat-score`, {
+      method: 'POST',
+      body: JSON.stringify({ score, studentId }),
+    })
       .then((data) => {
         setHighScore(data.highScore);
         setResult(data);
@@ -904,6 +1067,9 @@ function BeatYourScore({ list, onExit }) {
     return (
       <div className="screen center">
         <div className="card">
+          {isPreview && (
+            <p className="subtle">🔍 Previewing as {previewStudentName} — nothing here is saved</p>
+          )}
           <h1>🏆 Beat Your Score</h1>
           <p className="subtle">Answer as many cards as you can in 60 seconds.</p>
           <p className="progress">High Score: {highScore}</p>
@@ -922,6 +1088,9 @@ function BeatYourScore({ list, onExit }) {
     return (
       <div className="screen center">
         <div className="celebration">
+          {isPreview && (
+            <p className="subtle">🔍 Previewing as {previewStudentName} — this score was not saved</p>
+          )}
           <h1>⏱ Time's up!</h1>
           <p>You answered {score} correctly.</p>
           {result ? (
@@ -980,7 +1149,7 @@ function BeatYourScore({ list, onExit }) {
   );
 }
 
-function ThreePiles({ list, onExit }) {
+function ThreePiles({ list, studentId, isPreview, previewStudentName, onExit }) {
   const [deck, setDeck] = useState(null); // null = loading
   const [index, setIndex] = useState(0);
   const [piles, setPiles] = useState({ easy: 0, almost: 0, needs_practice: 0 });
@@ -992,7 +1161,7 @@ function ThreePiles({ list, onExit }) {
   const cardStartRef = useRef(Date.now());
 
   const load = useCallback(() => {
-    api(`/api/lists/${list.id}/words`)
+    api(`/api/lists/${list.id}/words?studentId=${studentId}`)
       .then((data) => {
         const remaining = data.words.filter((w) => w.threePiles !== 'easy');
         setDeck(shuffle(remaining));
@@ -1001,7 +1170,7 @@ function ThreePiles({ list, onExit }) {
         setRound((r) => r + 1);
       })
       .catch((err) => setError(err.message));
-  }, [list.id]);
+  }, [list.id, studentId]);
 
   useEffect(() => {
     load();
@@ -1032,13 +1201,15 @@ function ThreePiles({ list, onExit }) {
     setFlight(status);
     setPiles((p) => ({ ...p, [status]: p[status] + 1 }));
 
-    try {
-      await api(`/api/words/${current.id}/three-piles`, {
-        method: 'POST',
-        body: JSON.stringify({ status }),
-      });
-    } catch (err) {
-      setError(err.message);
+    if (!isPreview) {
+      try {
+        await api(`/api/words/${current.id}/three-piles`, {
+          method: 'POST',
+          body: JSON.stringify({ status, studentId }),
+        });
+      } catch (err) {
+        setError(err.message);
+      }
     }
 
     setTimeout(() => {
@@ -1051,7 +1222,10 @@ function ThreePiles({ list, onExit }) {
     if (!confirm('Reset all Three Piles progress for this list?')) return;
     setError('');
     try {
-      await api(`/api/lists/${list.id}/three-piles/reset`, { method: 'POST' });
+      await api(`/api/lists/${list.id}/three-piles/reset`, {
+        method: 'POST',
+        body: JSON.stringify({ studentId }),
+      });
       load();
     } catch (err) {
       setError(err.message);
@@ -1085,10 +1259,15 @@ function ThreePiles({ list, onExit }) {
         <button className="btn" onClick={onExit}>
           ← Games
         </button>
-        <button className="btn" onClick={resetProgress}>
-          🔄 Reset Progress
-        </button>
+        {!isPreview && (
+          <button className="btn" onClick={resetProgress}>
+            🔄 Reset Progress
+          </button>
+        )}
       </header>
+      {isPreview && (
+        <p className="subtle">🔍 Previewing as {previewStudentName} — sorting here isn't saved</p>
+      )}
 
       {done ? (
         <div className="celebration">
@@ -1273,20 +1452,63 @@ function App() {
   const [authenticated, setAuthenticated] = useState(false);
   const [screen, setScreen] = useState('mode');
   const [activeList, setActiveList] = useState(null);
+  const [students, setStudents] = useState([]);
+  const [studentId, setStudentId] = useState(() => {
+    try {
+      const stored = localStorage.getItem('vocab.studentId');
+      return stored ? Number(stored) : null;
+    } catch {
+      return null;
+    }
+  });
+  // Non-null while a parent is previewing a game from the dashboard: holds
+  // the student whose high score/progress to show, but nothing played here
+  // is ever saved (see BeatYourScore/ThreePiles) — this is how a parent's
+  // own runs stop overwriting a student's high score.
+  const [preview, setPreview] = useState(null);
 
   useEffect(() => {
-    api('/api/session')
-      .then((data) => setAuthenticated(data.authenticated))
+    Promise.all([api('/api/session'), api('/api/students')])
+      .then(([session, studentList]) => {
+        setAuthenticated(session.authenticated);
+        setStudents(studentList);
+      })
       .catch(() => setAuthenticated(false))
       .finally(() => setLoading(false));
   }, []);
 
   if (loading) return <div className="screen center" />;
 
+  const studentName = (id) => (students.find((s) => s.id === id) || {}).name || '';
+
+  const chooseStudent = (student) => {
+    setStudentId(student.id);
+    try {
+      localStorage.setItem('vocab.studentId', String(student.id));
+    } catch {
+      /* ignore - localStorage may be unavailable */
+    }
+    setScreen('student');
+  };
+
+  const startPreview = (list, previewedStudentId) => {
+    setActiveList(list);
+    setPreview({ studentId: previewedStudentId });
+    setScreen(list.name === 'Multiplication' ? 'multiplication-modes' : 'practice');
+  };
+
+  const exitToParent = () => {
+    setPreview(null);
+    setScreen('parent');
+  };
+
   if (screen === 'mode') {
     return (
       <ModeSelect
-        onPick={(target) => setScreen(target === 'parent' && !authenticated ? 'parent-login' : target)}
+        onPick={(target) => {
+          if (target === 'parent') return setScreen(authenticated ? 'parent' : 'parent-login');
+          setScreen(studentId ? 'student' : 'student-pick');
+        }}
       />
     );
   }
@@ -1304,26 +1526,48 @@ function App() {
   }
 
   if (screen === 'parent') {
-    return <ParentDashboard onExit={() => setScreen('mode')} />;
-  }
-
-  if (screen === 'student') {
     return (
-      <StudentListSelect
-        onPick={(list) => {
-          setActiveList(list);
-          setScreen(list.name === 'Multiplication' ? 'multiplication-modes' : 'practice');
-        }}
+      <ParentDashboard
+        students={students}
+        onPreview={startPreview}
         onExit={() => setScreen('mode')}
       />
     );
   }
 
+  if (screen === 'student-pick') {
+    return (
+      <StudentProfilePick students={students} onPick={chooseStudent} onExit={() => setScreen('mode')} />
+    );
+  }
+
+  if (screen === 'student') {
+    return (
+      <StudentListSelect
+        studentId={studentId}
+        studentName={studentName(studentId)}
+        onPick={(list) => {
+          setActiveList(list);
+          setScreen(list.name === 'Multiplication' ? 'multiplication-modes' : 'practice');
+        }}
+        onSwitch={() => setScreen('student-pick')}
+        onExit={() => setScreen('mode')}
+      />
+    );
+  }
+
+  const isPreview = !!preview;
+  const effectiveStudentId = isPreview ? preview.studentId : studentId;
+  const previewStudentName = isPreview ? studentName(preview.studentId) : '';
+  const backToStudentLists = isPreview ? exitToParent : () => setScreen('student');
+
   if (screen === 'multiplication-modes') {
     return (
       <MultiplicationModes
+        isPreview={isPreview}
+        previewStudentName={previewStudentName}
         onPick={(mode) => setScreen(mode)}
-        onExit={() => setScreen('student')}
+        onExit={backToStudentLists}
       />
     );
   }
@@ -1331,11 +1575,27 @@ function App() {
   const backToMultiplicationModes = () => setScreen('multiplication-modes');
 
   if (screen === 'beat-score') {
-    return <BeatYourScore list={activeList} onExit={backToMultiplicationModes} />;
+    return (
+      <BeatYourScore
+        list={activeList}
+        studentId={effectiveStudentId}
+        isPreview={isPreview}
+        previewStudentName={previewStudentName}
+        onExit={backToMultiplicationModes}
+      />
+    );
   }
 
   if (screen === 'three-piles') {
-    return <ThreePiles list={activeList} onExit={backToMultiplicationModes} />;
+    return (
+      <ThreePiles
+        list={activeList}
+        studentId={effectiveStudentId}
+        isPreview={isPreview}
+        previewStudentName={previewStudentName}
+        onExit={backToMultiplicationModes}
+      />
+    );
   }
 
   if (screen === 'missing-number') {
@@ -1347,7 +1607,7 @@ function App() {
     return (
       <StudentPractice
         list={activeList}
-        onExit={() => setScreen(isMultiplication ? 'multiplication-modes' : 'student')}
+        onExit={() => (isMultiplication ? setScreen('multiplication-modes') : backToStudentLists())}
         showStreak={isMultiplication}
         itemLabel={isMultiplication ? 'cards' : 'words'}
       />

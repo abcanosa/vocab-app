@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 
 const DEFAULT_PASSWORD = 'password123';
+const DEFAULT_STUDENTS = ['Elias', 'Nadia'];
 
 function ensureSetup(db) {
   db.exec(`
@@ -42,6 +43,38 @@ function ensureSetup(db) {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS sessions (
+      sid TEXT PRIMARY KEY,
+      session TEXT NOT NULL,
+      expires INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS students (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS list_assignments (
+      list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      PRIMARY KEY (list_id, student_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS word_progress (
+      word_id INTEGER NOT NULL REFERENCES words(id) ON DELETE CASCADE,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      three_piles_status TEXT,
+      PRIMARY KEY (word_id, student_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS list_scores (
+      list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      beat_score_high INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (list_id, student_id)
+    );
+
     PRAGMA foreign_keys = ON;
   `);
 
@@ -53,9 +86,27 @@ function ensureSetup(db) {
   if (!listColumns.some((c) => c.name === 'practice_mode')) {
     db.exec("ALTER TABLE lists ADD COLUMN practice_mode TEXT NOT NULL DEFAULT 'flip'");
   }
-  const wordColumns = db.prepare('PRAGMA table_info(words)').all();
-  if (!wordColumns.some((c) => c.name === 'three_piles_status')) {
-    db.exec('ALTER TABLE words ADD COLUMN three_piles_status TEXT');
+
+  // Lists used to require a globally unique name. Now that the same list can
+  // be copied across students, two different students' lists may share a
+  // name — rebuild the table without the UNIQUE constraint.
+  const listsHasUniqueName = db
+    .prepare("PRAGMA index_list('lists')")
+    .all()
+    .some((idx) => idx.origin === 'u');
+  if (listsHasUniqueName) {
+    db.exec(`
+      CREATE TABLE lists_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        grade_level TEXT,
+        practice_mode TEXT NOT NULL DEFAULT 'flip',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT INTO lists_new SELECT id, name, grade_level, practice_mode, created_at FROM lists;
+      DROP TABLE lists;
+      ALTER TABLE lists_new RENAME TO lists;
+    `);
   }
 
   const getSetting = db.prepare('SELECT value FROM settings WHERE key = ?');
@@ -73,7 +124,47 @@ function ensureSetup(db) {
     setSetting.run('session_secret', crypto.randomBytes(32).toString('hex'));
   }
 
+  const insertStudent = db.prepare('INSERT OR IGNORE INTO students (name) VALUES (?)');
+  for (const name of DEFAULT_STUDENTS) insertStudent.run(name);
+  const getStudentId = (name) => db.prepare('SELECT id FROM students WHERE name = ?').get(name).id;
+  const eliasId = getStudentId('Elias');
+
+  // Per-student "three piles" progress replaces the old single column on
+  // words, since the same list (and its progress) can now be shared by
+  // multiple students. Existing progress belonged to Elias, the only
+  // student who existed before this migration.
+  const wordColumns = db.prepare('PRAGMA table_info(words)').all();
+  if (wordColumns.some((c) => c.name === 'three_piles_status')) {
+    db.prepare(
+      `INSERT INTO word_progress (word_id, student_id, three_piles_status)
+       SELECT id, ?, three_piles_status FROM words WHERE three_piles_status IS NOT NULL`
+    ).run(eliasId);
+    db.exec('ALTER TABLE words DROP COLUMN three_piles_status');
+  }
+
+  // Same reasoning for Beat Your Score high scores: they used to live on
+  // list_stats (one per list); now they live per (list, student).
+  const listStatsColumns = db.prepare('PRAGMA table_info(list_stats)').all();
+  if (listStatsColumns.some((c) => c.name === 'beat_score_high')) {
+    db.prepare(
+      `INSERT INTO list_scores (list_id, student_id, beat_score_high)
+       SELECT list_id, ?, beat_score_high FROM list_stats WHERE beat_score_high > 0`
+    ).run(eliasId);
+    db.exec('ALTER TABLE list_stats DROP COLUMN beat_score_high');
+  }
+
   seedMultiplicationList(db);
+
+  // One-time: every list that existed before students were introduced
+  // belonged to Elias. Runs once (guarded by the settings flag) so it never
+  // re-assigns a list a parent has since deliberately unassigned.
+  if (!getSetting.get('lists_migrated_to_elias')) {
+    db.prepare(
+      `INSERT OR IGNORE INTO list_assignments (list_id, student_id)
+       SELECT id, ? FROM lists WHERE id NOT IN (SELECT list_id FROM list_assignments)`
+    ).run(eliasId);
+    setSetting.run('lists_migrated_to_elias', '1');
+  }
 }
 
 // Idempotent: only runs once, the first time the app starts without a list

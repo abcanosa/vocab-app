@@ -1,3 +1,4 @@
+const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
@@ -8,7 +9,12 @@ const Database = require('better-sqlite3');
 const { ensureSetup } = require('./setup');
 
 const PORT = process.env.PORT || 3000;
-const DB_PATH = path.join(__dirname, 'vocab.db');
+// Override with DB_PATH to point at a persistent volume (e.g. on Railway,
+// a mounted volume) — otherwise the database lives next to the app code and
+// is lost whenever the deployment's filesystem resets.
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'vocab.db');
+
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
 const db = new Database(DB_PATH);
 ensureSetup(db);

@@ -1,0 +1,21 @@
+{
+  "name": "vocab-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Family vocabulary flashcard app with a parent dashboard and a student practice mode.",
+  "scripts": {
+    "build": "node build-frontend.js",
+    "postinstall": "node build-frontend.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.3.0",
+    "cors": "^2.8.5",
+    "esbuild": "^0.23.1",
+    "express": "^4.19.2",
+    "express-session": "^1.18.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

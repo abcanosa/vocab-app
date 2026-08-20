@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "description": "Family vocabulary flashcard app with a parent dashboard and a student practice mode.",
+  "engines": {
+    "node": "22"
+  },
   "scripts": {
     "build": "node build-frontend.js",
     "postinstall": "node build-frontend.js",
